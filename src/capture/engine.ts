@@ -1,7 +1,14 @@
 import { FeatureExtractor } from '../features/extract';
 import { ANALYSIS, type FeatureFrame } from '../features/types';
 
-export type SourceKind = 'mic' | 'tone-hold' | 'tone-glide';
+export type CaptureSource =
+  | { kind: 'mic' }
+  | { kind: 'tone-hold' }
+  | { kind: 'tone-glide' }
+  /** Feed an AudioBuffer through the capture path — the automated stand-in for
+   *  a singer (e2e tests chase the target with its own audio, optionally
+   *  pitch/tempo-shifted via playbackRate). */
+  | { kind: 'buffer'; buffer: AudioBuffer; playbackRate?: number; audible?: boolean };
 
 export interface EngineStats {
   sampleRate: number;
@@ -12,14 +19,17 @@ export interface EngineStats {
   trackSettings: MediaTrackSettings | null;
 }
 
-/** Owns the AudioContext, the capture path (mic or test tone), the sliding
- *  analysis window, and per-hop feature extraction. Emits FeatureFrames. */
+/** Owns THE AudioContext (single clock for capture, playback and animation),
+ *  the capture path, the sliding analysis window, and per-hop feature
+ *  extraction. Emits FeatureFrames stamped with AudioContext time. */
 export class AudioEngine {
   private ctx: AudioContext | null = null;
+  private workletReady: Promise<void> | null = null;
   private node: AudioWorkletNode | null = null;
+  private mute: GainNode | null = null;
   private source: AudioNode | null = null;
   private stream: MediaStream | null = null;
-  private osc: OscillatorNode | null = null;
+  private sourceStop: (() => void) | null = null;
   private extractor: FeatureExtractor | null = null;
 
   private windowBuf: Float32Array = new Float32Array(ANALYSIS.windowSize);
@@ -35,20 +45,69 @@ export class AudioEngine {
     return this.node !== null;
   }
 
-  async start(kind: SourceKind): Promise<void> {
-    await this.stop();
-    const ctx = new AudioContext({ latencyHint: 'interactive' });
-    this.ctx = ctx;
-    if (ctx.state === 'suspended') await ctx.resume();
+  /** The single product clock. 0 until the context exists. */
+  now(): number {
+    return this.ctx?.currentTime ?? 0;
+  }
 
-    await ctx.audioWorklet.addModule(`${import.meta.env.BASE_URL}capture-processor.js`);
+  /** Create (or resume) the shared context. Must follow a user gesture.
+   *  Pinned to the canonical analysis rate: MFCC/centroid features are
+   *  sample-rate-dependent and Target Packs are baked at 48 kHz — letting the
+   *  device rate leak in would bias every live-vs-pack comparison. */
+  async ensureContext(): Promise<AudioContext> {
+    if (!this.ctx) {
+      this.ctx = new AudioContext({ latencyHint: 'interactive', sampleRate: ANALYSIS.sampleRate });
+      this.workletReady = this.ctx.audioWorklet.addModule(`${import.meta.env.BASE_URL}capture-processor.js`);
+    }
+    if (this.ctx.state === 'suspended') await this.ctx.resume();
+    await this.workletReady;
+    return this.ctx;
+  }
+
+  async decode(data: ArrayBuffer): Promise<AudioBuffer> {
+    const ctx = await this.ensureContext();
+    return ctx.decodeAudioData(data);
+  }
+
+  /** Play a clip through the shared clock. Returns its context start time. */
+  async play(buffer: AudioBuffer, onEnded?: () => void): Promise<{ startTime: number; stop(): void }> {
+    const ctx = await this.ensureContext();
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.connect(ctx.destination);
+    if (onEnded) src.onended = onEnded;
+    const startTime = ctx.currentTime + 0.05;
+    src.start(startTime);
+    return {
+      startTime,
+      stop: () => {
+        try {
+          src.stop();
+        } catch {
+          /* already stopped */
+        }
+      },
+    };
+  }
+
+  private captureGen = 0;
+
+  async startCapture(source: CaptureSource): Promise<void> {
+    // Reentrancy guard: overlapping calls (e.g. a quick retry while a mic
+    // prompt is pending) must not interleave two capture paths into one
+    // analysis window. The newest call wins; stale ones abandon cleanly.
+    const gen = ++this.captureGen;
+    await this.stopCapture();
+    const ctx = await this.ensureContext();
+    if (gen !== this.captureGen) return;
 
     const hopSize = ANALYSIS.hopSize(ctx.sampleRate);
     this.extractor = new FeatureExtractor(ctx.sampleRate);
     this.windowBuf.fill(0);
+    this.trackSettings = null;
 
-    if (kind === 'mic') {
-      this.stream = await navigator.mediaDevices.getUserMedia({
+    if (source.kind === 'mic') {
+      const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: false,
           noiseSuppression: false,
@@ -56,13 +115,32 @@ export class AudioEngine {
           channelCount: 1,
         },
       });
-      const track = this.stream.getAudioTracks()[0];
+      if (gen !== this.captureGen) {
+        for (const track of stream.getTracks()) track.stop();
+        return;
+      }
+      this.stream = stream;
+      const track = stream.getAudioTracks()[0];
       this.trackSettings = track ? track.getSettings() : null;
-      this.source = ctx.createMediaStreamSource(this.stream);
+      this.source = ctx.createMediaStreamSource(stream);
+    } else if (source.kind === 'buffer') {
+      const src = ctx.createBufferSource();
+      src.buffer = source.buffer;
+      src.playbackRate.value = source.playbackRate ?? 1;
+      if (source.audible) src.connect(ctx.destination);
+      src.start();
+      this.sourceStop = () => {
+        try {
+          src.stop();
+        } catch {
+          /* already stopped */
+        }
+      };
+      this.source = src;
     } else {
       const osc = ctx.createOscillator();
       osc.type = 'sawtooth';
-      if (kind === 'tone-hold') {
+      if (source.kind === 'tone-hold') {
         osc.frequency.value = 220;
       } else {
         osc.frequency.setValueAtTime(220, ctx.currentTime);
@@ -76,9 +154,8 @@ export class AudioEngine {
       gain.gain.value = 0.5;
       osc.connect(gain);
       osc.start();
-      this.osc = osc;
+      this.sourceStop = () => osc.stop();
       this.source = gain;
-      this.trackSettings = null;
     }
 
     const node = new AudioWorkletNode(ctx, 'capture-processor', {
@@ -91,6 +168,7 @@ export class AudioEngine {
     // The worklet must be pulled by the graph; route through a muted gain.
     const mute = ctx.createGain();
     mute.gain.value = 0;
+    this.mute = mute;
     this.source.connect(node);
     node.connect(mute);
     mute.connect(ctx.destination);
@@ -139,26 +217,36 @@ export class AudioEngine {
     };
   }
 
-  async stop(): Promise<void> {
+  /** Stop the capture path. The context (and clock) stays alive. */
+  async stopCapture(): Promise<void> {
+    // Tell the processor to return false (lets the audio thread release it),
+    // THEN close the port and tear down the graph.
+    this.node?.port.postMessage('stop');
     this.node?.port.close();
     this.node?.disconnect();
     this.node = null;
+    this.mute?.disconnect();
+    this.mute = null;
+    this.sourceStop?.();
+    this.sourceStop = null;
     this.source?.disconnect();
     this.source = null;
-    if (this.osc) {
-      this.osc.stop();
-      this.osc = null;
-    }
     if (this.stream) {
       for (const track of this.stream.getTracks()) track.stop();
       this.stream = null;
     }
-    if (this.ctx) {
-      await this.ctx.close();
-      this.ctx = null;
-    }
     this.extractor = null;
     this.frameTimes = [];
     this.extractTimes = [];
+  }
+
+  /** Full teardown, context included (debug page / page unload). */
+  async close(): Promise<void> {
+    await this.stopCapture();
+    if (this.ctx) {
+      await this.ctx.close();
+      this.ctx = null;
+      this.workletReady = null;
+    }
   }
 }

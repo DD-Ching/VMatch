@@ -7,9 +7,17 @@ class CaptureProcessor extends AudioWorkletProcessor {
     this.hopSize = opts.hopSize || 480;
     this.buf = new Float32Array(this.hopSize);
     this.fill = 0;
+    this.stopped = false;
+    // Returning true from process() keeps the processor alive forever; the
+    // main thread must tell it to die or every capture cycle leaks a running
+    // processor on the audio thread.
+    this.port.onmessage = (e) => {
+      if (e.data === 'stop') this.stopped = true;
+    };
   }
 
   process(inputs) {
+    if (this.stopped) return false;
     const input = inputs[0];
     if (!input || input.length === 0) return true;
     const ch = input[0];

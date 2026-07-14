@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VMatch — audio spine (debug)</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>☄️</text></svg>" />
+  <style>
+    :root {
+      --ground: #0A0E16;
+      --surface: #121826;
+      --ink: #E8E6DF;
+      --muted: #8B93A7;
+      --gold: #E8B44A;
+      --cyan: #6FD6E8;
+      --line: rgba(139, 147, 167, 0.18);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--ground);
+      color: var(--ink);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--line);
+      flex-wrap: wrap;
+    }
+    header h1 {
+      font-size: 15px;
+      font-weight: 600;
+      margin: 0;
+    }
+    header h1 span { color: var(--muted); font-weight: 400; }
+    button {
+      background: var(--surface);
+      color: var(--ink);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 6px 14px;
+      font: inherit;
+      cursor: pointer;
+    }
+    button:hover:not(:disabled) { border-color: var(--cyan); }
+    button:disabled { opacity: 0.4; cursor: default; }
+    button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+    #status {
+      color: var(--muted);
+      font-family: ui-monospace, monospace;
+      font-size: 12px;
+    }
+    main { flex: 1; display: flex; min-height: 0; }
+    #scope { flex: 1 1 0; min-width: 0; display: block; }
+    aside {
+      width: 230px;
+      border-left: 1px solid var(--line);
+      padding: 14px 16px;
+      font-family: ui-monospace, monospace;
+      font-size: 12px;
+      overflow-y: auto;
+    }
+    aside h2 {
+      font-size: 11px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 0 0 10px;
+      font-weight: 600;
+    }
+    dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin: 0 0 22px; }
+    dt { color: var(--muted); }
+    dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+    #ro-f0, #ro-note { color: var(--cyan); }
+    #ro-centroid { color: var(--gold); }
+    .analyze label {
+      display: inline-block;
+      border: 1px dashed var(--line);
+      border-radius: 6px;
+      padding: 10px 12px;
+      cursor: pointer;
+      color: var(--muted);
+      width: 100%;
+    }
+    .analyze label:hover { border-color: var(--gold); color: var(--ink); }
+    .analyze input { display: none; }
+    #analyze-status { color: var(--muted); margin-top: 8px; line-height: 1.5; word-break: break-word; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>VMatch <span>· M0 audio spine</span></h1>
+    <button id="btn-mic">Start mic</button>
+    <button id="btn-tone">Test tone</button>
+    <button id="btn-glide">Test glide</button>
+    <button id="btn-stop" disabled>Stop</button>
+    <span id="status">idle — headphones recommended for mic use</span>
+  </header>
+  <main>
+    <canvas id="scope"></canvas>
+    <aside>
+      <h2>Live frame</h2>
+      <dl>
+        <dt>f0</dt><dd id="ro-f0">—</dd>
+        <dt>note</dt><dd id="ro-note">—</dd>
+        <dt>clarity</dt><dd id="ro-clarity">—</dd>
+        <dt>loudness</dt><dd id="ro-db">—</dd>
+        <dt>centroid</dt><dd id="ro-centroid">—</dd>
+        <dt>flatness</dt><dd id="ro-flatness">—</dd>
+      </dl>
+      <h2>Engine</h2>
+      <dl>
+        <dt>frames</dt><dd id="ro-fps">—</dd>
+        <dt>extract</dt><dd id="ro-extract">—</dd>
+        <dt>latency</dt><dd id="ro-latency">—</dd>
+      </dl>
+      <h2>Target pack</h2>
+      <div class="analyze">
+        <label>drop / choose an audio file to analyze offline
+          <input type="file" id="file-input" accept="audio/*" />
+        </label>
+        <div id="analyze-status"></div>
+      </div>
+    </aside>
+  </main>
+  <script type="module" src="/src/debug-main.ts"></script>
+</body>
+</html>

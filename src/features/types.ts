@@ -38,6 +38,8 @@ export interface TargetPack {
     name: string;
     durationSec: number;
     createdBy: string;
+    /** Clip tempo when known — drives the count-in pulse spacing (D9). */
+    bpm?: number;
   };
 }
 

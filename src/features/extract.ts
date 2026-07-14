@@ -17,7 +17,17 @@ export class FeatureExtractor {
     private readonly windowSize: number = ANALYSIS.windowSize,
   ) {
     this.detector = PitchDetector.forFloat32Array(windowSize);
-    // Meyda's extractors read these globals when called as pure functions.
+    // Meyda's extractors read these globals when called as pure functions —
+    // AND cache the mel filter bank keyed only by band count, not sample rate.
+    // Every extractor in the app must therefore run at the canonical rate
+    // (the AudioContext is pinned to it); a mismatch would silently produce
+    // MFCCs from a wrong-rate filter bank.
+    if (sampleRate !== ANALYSIS.sampleRate) {
+      console.warn(
+        `FeatureExtractor at ${sampleRate} Hz != canonical ${ANALYSIS.sampleRate} Hz — ` +
+          'MFCCs will not be comparable with Target Packs',
+      );
+    }
     Meyda.sampleRate = sampleRate;
     Meyda.bufferSize = windowSize;
     Meyda.windowingFunction = 'hanning';

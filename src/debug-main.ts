@@ -1,4 +1,4 @@
-import { AudioEngine, type SourceKind } from './capture/engine';
+import { AudioEngine, type CaptureSource } from './capture/engine';
 import { Scope } from './debug/scope';
 import { FrameRing } from './state/ring';
 import { midiToNoteName, type FeatureFrame } from './features/types';
@@ -37,11 +37,11 @@ function setButtons(running: boolean): void {
   (el('btn-stop') as HTMLButtonElement).disabled = !running;
 }
 
-async function start(kind: SourceKind): Promise<void> {
+async function start(kind: CaptureSource['kind']): Promise<void> {
   status.textContent = 'starting…';
   try {
     ring.clear();
-    await engine.start(kind);
+    await engine.startCapture({ kind } as CaptureSource);
     const s = engine.stats();
     const src = kind === 'mic' ? 'microphone' : kind === 'tone-hold' ? 'test tone A3' : 'test glide A3–A4';
     let settings = '';
@@ -61,7 +61,7 @@ el('btn-mic').addEventListener('click', () => void start('mic'));
 el('btn-tone').addEventListener('click', () => void start('tone-hold'));
 el('btn-glide').addEventListener('click', () => void start('tone-glide'));
 el('btn-stop').addEventListener('click', () => {
-  void engine.stop().then(() => {
+  void engine.stopCapture().then(() => {
     status.textContent = 'stopped';
     setButtons(false);
   });
